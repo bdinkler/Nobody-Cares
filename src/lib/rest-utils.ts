@@ -1,5 +1,5 @@
 import { supabase } from '@/src/lib/supabase';
-import { getTodayISODate } from '@/src/lib/date-utils';
+import { getLocalDateYYYYMMDD } from '@/src/lib/date-utils';
 
 /**
  * Check if a task title is eligible for rest.
@@ -61,7 +61,7 @@ export async function insertTaskRest(taskId: string): Promise<void> {
       throw new Error('Not authenticated');
     }
 
-    const todayStr = getTodayISODate();
+    const todayStr = getLocalDateYYYYMMDD();
 
     const { error: insertError } = await supabase
       .from('task_rests')

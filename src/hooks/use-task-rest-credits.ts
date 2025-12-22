@@ -2,8 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/src/lib/supabase';
 
 export type TaskRestCredits = {
-  task_id: string;
-  monthly_limit: number;
+  limit: number;
   used: number;
   remaining: number;
 };
@@ -29,18 +28,24 @@ export function useTaskRestCredits(taskId: string | null) {
       setLoading(true);
       setError(null);
 
-      const { data, error: rpcError } = await supabase.rpc('get_task_rest_credits', {
-        p_task_id: taskId,
-      });
+      const payload = { p_task_id: taskId };
+      const { data, error: rpcError } = await supabase.rpc('get_task_rest_credits', payload);
 
       if (rpcError) {
-        console.error('[useTaskRestCredits] Error fetching credits:', rpcError);
-        setError(rpcError.message);
+        // Enhanced error logging with actionable details
+        console.error('[useTaskRestCredits] RPC Error:', {
+          message: rpcError.message,
+          details: rpcError.details,
+          hint: rpcError.hint,
+          code: rpcError.code,
+          payloadKeys: Object.keys(payload),
+          payload: payload,
+        });
+        setError(rpcError.message || 'Failed to fetch rest credits');
         setCredits(null);
       } else if (data) {
         setCredits({
-          task_id: data.task_id || taskId,
-          monthly_limit: data.monthly_limit || 0,
+          limit: data.limit || 0,
           used: data.used || 0,
           remaining: data.remaining || 0,
         });

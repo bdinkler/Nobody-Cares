@@ -1,0 +1,77 @@
+-- Migration: Create avatars storage bucket and policies
+-- 
+-- NOTE: Storage bucket and policy creation in Supabase requires superuser privileges
+-- that are not available through the SQL Editor. You MUST set this up via the Supabase Dashboard.
+--
+-- INSTRUCTIONS: Set up storage bucket and policies via Supabase Dashboard
+--
+-- ============================================================================
+-- STEP 1: Create the Storage Bucket
+-- ============================================================================
+-- 1. Go to Supabase Dashboard -> Storage
+-- 2. Click "Create bucket"
+-- 3. Configure:
+--    - Name: "avatars"
+--    - Public: true (recommended for avatars, allows direct URL access)
+--    - File size limit: 5242880 (5MB) - optional
+--    - Allowed MIME types: image/jpeg, image/jpg, image/png - optional
+-- 4. Click "Create bucket"
+--
+-- ============================================================================
+-- STEP 2: Create Storage Policies (via Dashboard)
+-- ============================================================================
+-- After creating the bucket, click on it to open bucket settings, then go to "Policies" tab.
+--
+-- Create the following policies (click "New Policy" for each):
+--
+-- 1. Policy Name: "Users can upload avatars to their own folder"
+--    Operation: INSERT
+--    Target roles: authenticated
+--    Policy definition (USING expression): 
+--      bucket_id = 'avatars' AND (storage.foldername(name))[1] = auth.uid()::text
+--    Policy definition (WITH CHECK expression):
+--      bucket_id = 'avatars' AND (storage.foldername(name))[1] = auth.uid()::text
+--
+-- 2. Policy Name: "Anyone authenticated can read avatars"
+--    Operation: SELECT
+--    Target roles: authenticated
+--    Policy definition (USING expression):
+--      bucket_id = 'avatars'
+--
+-- 3. Policy Name: "Users can update their own avatars"
+--    Operation: UPDATE
+--    Target roles: authenticated
+--    Policy definition (USING expression):
+--      bucket_id = 'avatars' AND (storage.foldername(name))[1] = auth.uid()::text
+--    Policy definition (WITH CHECK expression):
+--      bucket_id = 'avatars' AND (storage.foldername(name))[1] = auth.uid()::text
+--
+-- 4. Policy Name: "Users can delete their own avatars"
+--    Operation: DELETE
+--    Target roles: authenticated
+--    Policy definition (USING expression):
+--      bucket_id = 'avatars' AND (storage.foldername(name))[1] = auth.uid()::text
+--
+-- ============================================================================
+-- ALTERNATIVE: Using Policy Templates
+-- ============================================================================
+-- In the Supabase Dashboard Storage Policies UI, you can also use policy templates:
+--
+-- For INSERT: Use "Users can upload files to their own folder" template
+--   - Modify the USING expression to: (storage.foldername(name))[1] = auth.uid()::text
+--
+-- For SELECT: Use "Anyone can view files" template (if bucket is public)
+--   OR "Authenticated users can view files" template
+--   - Modify the USING expression to: bucket_id = 'avatars'
+--
+-- For UPDATE/DELETE: Similar to INSERT, restrict to user's own folder
+--
+-- ============================================================================
+-- VERIFICATION
+-- ============================================================================
+-- After setup, verify that:
+-- 1. The 'avatars' bucket exists and is public (or has proper read policies)
+-- 2. All 4 policies are listed under the bucket's Policies tab
+-- 3. Users can upload files to avatars/{user_id}/... paths
+-- 4. Users can read files from the bucket
+-- 5. Users can only update/delete files in their own folder

@@ -25,6 +25,12 @@ const DEFAULT_READ_DURATION = 30;
 // Commitments that support duration
 const DURATION_COMMITMENTS = ['Workout', 'Deep Work', 'Read'];
 
+// Commitments that support rest credits with their monthly limits
+const REST_LIMITS: Record<string, number> = {
+  'Workout': 4,
+  'Deep Work': 8,
+};
+
 export default function CommitmentsScreen() {
   const [selected, setSelected] = useState<string[]>([]);
   const [customCommitments, setCustomCommitments] = useState<string[]>([]);
@@ -91,7 +97,7 @@ export default function CommitmentsScreen() {
         return;
       }
 
-      // Create tasks for selected commitments with durations
+      // Create tasks for selected commitments with durations and rest limits
       const tasks = selected.map((commitment) => {
         const task: any = {
           user_id: user.id,
@@ -102,6 +108,11 @@ export default function CommitmentsScreen() {
         // Add duration if this commitment supports it
         if (DURATION_COMMITMENTS.includes(commitment) && durations[commitment]) {
           task.duration_minutes = durations[commitment];
+        }
+
+        // Add rest_limit_per_month if this commitment has a rest limit
+        if (REST_LIMITS[commitment] !== undefined) {
+          task.rest_limit_per_month = REST_LIMITS[commitment];
         }
 
         return task;

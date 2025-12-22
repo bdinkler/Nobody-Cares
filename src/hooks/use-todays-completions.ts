@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { getLocalDateYYYYMMDD } from '@/src/lib/date-utils';
 import { supabase } from '@/src/lib/supabase';
-import { getTodayISODate } from '@/src/lib/date-utils';
+import { useCallback, useEffect, useState } from 'react';
 
 /**
  * Hook to fetch and manage today's task completions from Supabase.
@@ -24,7 +24,7 @@ export function useTodaysCompletions() {
         return;
       }
 
-      const today = getTodayISODate();
+      const today = getLocalDateYYYYMMDD();
       const { data, error: completionsError } = await supabase
         .from('task_completions')
         .select('task_id')

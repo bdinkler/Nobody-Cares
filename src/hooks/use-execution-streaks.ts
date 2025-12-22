@@ -29,29 +29,28 @@ export function useExecutionStreaks() {
         return;
       }
 
-      const { data: streakData, error: fetchError } = await supabase
-        .from('user_execution_streaks')
-        .select('current_streak_days, best_streak_days')
-        .eq('user_id', user.id)
-        .single();
+      // Use RPC function that computes streaks using timezone-safe logic
+      // This ensures day boundaries align with user's local midnight
+      const { data: streakDataArray, error: fetchError } = await supabase
+        .rpc('get_execution_streaks', { p_user_id: user.id });
+
+      // RPC returns array - take first row
+      const streakData = streakDataArray && streakDataArray.length > 0 ? streakDataArray[0] : null;
 
       if (fetchError) {
-        // If no row found, user might have no active tasks or no data yet
-        if (fetchError.code === 'PGRST116') {
-          // No rows returned - return zero values
-          console.log('[useExecutionStreaks] No streak data found for user, returning 0');
-          setCurrentStreakDays(0);
-          setBestStreakDays(0);
-        } else {
-          console.error('[useExecutionStreaks] Error fetching streaks:', fetchError);
-          setError(fetchError.message);
-          setCurrentStreakDays(0);
-          setBestStreakDays(0);
-        }
-      } else {
+        console.error('[useExecutionStreaks] Error fetching streaks:', fetchError);
+        setError(fetchError.message);
+        setCurrentStreakDays(0);
+        setBestStreakDays(0);
+      } else if (streakData) {
         console.log('[useExecutionStreaks] Streak data:', streakData);
-        setCurrentStreakDays(streakData?.current_streak_days ?? 0);
-        setBestStreakDays(streakData?.best_streak_days ?? 0);
+        setCurrentStreakDays(streakData.current_streak_days ?? 0);
+        setBestStreakDays(streakData.best_streak_days ?? 0);
+      } else {
+        // No data returned - return zero values
+        console.warn('[useExecutionStreaks] No streak data returned from RPC, using zero values');
+        setCurrentStreakDays(0);
+        setBestStreakDays(0);
       }
     } catch (err) {
       console.error('[useExecutionStreaks] Unexpected error:', err);

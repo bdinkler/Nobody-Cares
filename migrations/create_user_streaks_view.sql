@@ -1,10 +1,11 @@
--- Migration: Create user_execution_streaks view (SIMPLIFIED & FIXED)
--- Run this in your Supabase SQL Editor
-
 -- ============================================
--- PART A: Ensure indexes exist for performance
+-- Migration: Create user_execution_streaks view (OPTION 2)
+-- - Current streak is consecutive executed days ending at yesterday
+-- - Onboarding tasks count immediately on signup day
+-- - Tasks added later begin tracking tomorrow
 -- ============================================
 
+-- PART A: Indexes
 CREATE INDEX IF NOT EXISTS idx_task_completions_user_date 
 ON public.task_completions(user_id, completed_on);
 
@@ -14,17 +15,13 @@ ON public.task_rests(user_id, rested_on);
 CREATE INDEX IF NOT EXISTS idx_tasks_user_active 
 ON public.tasks(user_id, is_active);
 
--- ============================================
--- PART B: Create user_execution_streaks view
--- ============================================
-
+-- PART B: View
 DROP VIEW IF EXISTS public.user_execution_streaks;
 
 CREATE VIEW public.user_execution_streaks AS
 WITH yesterday AS (
   SELECT (CURRENT_DATE - INTERVAL '1 day')::date AS as_of_date
 ),
--- Simple date range: last 365 days up to yesterday
 date_range AS (
   SELECT generate_series(
     (CURRENT_DATE - INTERVAL '365 days')::date,
@@ -32,19 +29,30 @@ date_range AS (
     '1 day'::interval
   )::date AS day_date
 ),
--- Get all users who have active tasks
 users_with_tasks AS (
   SELECT DISTINCT user_id
   FROM public.tasks
   WHERE is_active = true
 ),
--- Get all active tasks
 active_tasks AS (
-  SELECT user_id, id AS task_id, created_at
-  FROM public.tasks
-  WHERE is_active = true
+  SELECT 
+    t.user_id,
+    t.id AS task_id,
+    t.created_at,
+    p.created_at AS profile_created_at,
+    CASE
+      WHEN t.created_at IS NOT NULL
+       AND p.created_at IS NOT NULL
+       AND t.created_at::date = p.created_at::date
+      THEN t.created_at::date
+      WHEN t.created_at IS NOT NULL
+      THEN (t.created_at::date + 1)
+      ELSE CURRENT_DATE::date
+    END AS tracking_start_date
+  FROM public.tasks t
+  LEFT JOIN public.profiles p ON p.id = t.user_id
+  WHERE t.is_active = true
 ),
--- Get dates where tasks had completions (tasks must have existed on those dates)
 tasks_with_completions AS (
   SELECT DISTINCT
     tc.user_id,
@@ -57,10 +65,6 @@ tasks_with_completions AS (
   )
   WHERE tc.completed_on <= (SELECT as_of_date FROM yesterday)
 ),
--- For each user, get all dates where they have active tasks
--- A task is eligible on a date if:
--- 1. It was created on or before that date, OR
--- 2. It has a completion on that date (proving it existed then)
 user_task_dates AS (
   SELECT 
     at.user_id,
@@ -69,10 +73,11 @@ user_task_dates AS (
   FROM active_tasks at
   CROSS JOIN date_range dr
   WHERE (
-    at.created_at IS NULL 
-    OR at.created_at::date <= dr.day_date
+    -- Eligible only starting the tracking_start_date (option 2 rule)
+    dr.day_date >= at.tracking_start_date
     OR EXISTS (
-      SELECT 1 
+      -- Safety: if there was a completion that day, include it
+      SELECT 1
       FROM tasks_with_completions twc
       WHERE twc.user_id = at.user_id
         AND twc.task_id = at.task_id
@@ -80,7 +85,6 @@ user_task_dates AS (
     )
   )
 ),
--- Get all rested task instances
 rested_instances AS (
   SELECT 
     user_id,
@@ -89,7 +93,6 @@ rested_instances AS (
   FROM public.task_rests
   WHERE rested_on <= (SELECT as_of_date FROM yesterday)
 ),
--- Eligible tasks = active tasks minus rested tasks
 eligible_instances AS (
   SELECT 
     utd.user_id,
@@ -101,9 +104,8 @@ eligible_instances AS (
     AND utd.task_id = ri.task_id
     AND utd.day_date = ri.day_date
   )
-  WHERE ri.user_id IS NULL  -- Exclude rested tasks
+  WHERE ri.user_id IS NULL
 ),
--- Count eligible tasks per user per day
 eligible_counts AS (
   SELECT 
     user_id,
@@ -112,7 +114,6 @@ eligible_counts AS (
   FROM eligible_instances
   GROUP BY user_id, day_date
 ),
--- Get all completions (only for dates <= yesterday)
 all_completions AS (
   SELECT 
     user_id,
@@ -121,8 +122,6 @@ all_completions AS (
   FROM public.task_completions
   WHERE completed_on <= (SELECT as_of_date FROM yesterday)
 ),
--- Count completed tasks per user per day (only for eligible tasks)
--- This ensures we only count completions for tasks that were eligible
 completed_counts AS (
   SELECT 
     ei.user_id,
@@ -136,7 +135,6 @@ completed_counts AS (
   )
   GROUP BY ei.user_id, ei.day_date
 ),
--- Determine which days are executed (100% completion)
 executed_days AS (
   SELECT 
     ec.user_id,
@@ -155,7 +153,6 @@ executed_days AS (
     AND ec.day_date = cc.day_date
   )
 ),
--- Filter to only executed days
 executed_days_only AS (
   SELECT 
     user_id,
@@ -163,8 +160,6 @@ executed_days_only AS (
   FROM executed_days
   WHERE is_executed = true
 ),
--- Group consecutive executed days into streaks
--- Use the date - row_number trick to identify consecutive groups
 streak_groups AS (
   SELECT 
     user_id,
@@ -175,7 +170,6 @@ streak_groups AS (
     )::integer AS streak_group
   FROM executed_days_only
 ),
--- Calculate streak lengths
 streak_lengths AS (
   SELECT 
     user_id,
@@ -186,7 +180,6 @@ streak_lengths AS (
   FROM streak_groups
   GROUP BY user_id, streak_group
 ),
--- Find current streak (ending at yesterday)
 current_streaks AS (
   SELECT 
     user_id,
@@ -194,7 +187,6 @@ current_streaks AS (
   FROM streak_lengths
   WHERE streak_end = (SELECT as_of_date FROM yesterday)
 ),
--- Find best streak (max length) - handle NULL case
 best_streaks AS (
   SELECT 
     user_id,
@@ -202,7 +194,6 @@ best_streaks AS (
   FROM streak_lengths
   GROUP BY user_id
 )
--- Final result: one row per user with active tasks
 SELECT 
   uwt.user_id,
   COALESCE(cs.current_streak_days, 0) AS current_streak_days,
@@ -213,6 +204,6 @@ LEFT JOIN current_streaks cs ON cs.user_id = uwt.user_id
 LEFT JOIN best_streaks bs ON bs.user_id = uwt.user_id;
 
 COMMENT ON VIEW public.user_execution_streaks IS 
-'User execution streaks. Current streak is consecutive executed days ending at yesterday. Best streak is the longest consecutive executed days in history. A day is executed if 100% of eligible tasks (excluding rested tasks) are completed. Today is excluded from calculations.';
+'User execution streaks. Current streak is consecutive executed days ending at yesterday. Onboarding tasks count immediately on signup day; tasks added later begin tracking tomorrow. Today excluded from streak evaluation.';
 
 ALTER VIEW public.user_execution_streaks SET (security_invoker = true);

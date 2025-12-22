@@ -9,13 +9,14 @@ import {
   ActivityIndicator,
   SafeAreaView,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { supabase } from '@/src/lib/supabase';
 import { useProfile } from '@/src/hooks/use-profile';
 import { useExecutionStreaks } from '@/src/hooks/use-execution-streaks';
 
 export default function ProfileScreen() {
-  const { firstName, email, loading: profileLoading } = useProfile();
+  const { firstName, email, avatarUrl, loading: profileLoading } = useProfile();
   const { currentStreakDays, bestStreakDays, loading: streaksLoading } = useExecutionStreaks();
   const [signingOut, setSigningOut] = useState(false);
 
@@ -70,15 +71,27 @@ export default function ProfileScreen() {
     router.push('/profile/support');
   };
 
+  const handleManageSubscription = () => {
+    router.push('/profile/subscription');
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.contentContainer}>
         {/* Profile Header */}
         <View style={styles.headerSection}>
           <View style={styles.avatarContainer}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{getInitials(firstName)}</Text>
-            </View>
+            {avatarUrl ? (
+              <Image
+                source={{ uri: avatarUrl }}
+                style={styles.avatar}
+                contentFit="cover"
+              />
+            ) : (
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{getInitials(firstName)}</Text>
+              </View>
+            )}
           </View>
           <TouchableOpacity
             onPress={handleEditProfile}
@@ -134,6 +147,14 @@ export default function ProfileScreen() {
             onPress={handleGiveFeedback}
             activeOpacity={0.7}>
             <Text style={styles.actionText}>Give Feedback</Text>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionRow}
+            onPress={handleManageSubscription}
+            activeOpacity={0.7}>
+            <Text style={styles.actionText}>Manage Subscription</Text>
             <Text style={styles.chevron}>›</Text>
           </TouchableOpacity>
 

@@ -1,33 +1,34 @@
-import React, { useState, useMemo } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  ActivityIndicator,
-  SafeAreaView,
-  Modal,
-  Alert,
-} from 'react-native';
-import { router } from 'expo-router';
-import { useTodaysTasks } from '@/src/hooks/use-todays-tasks';
-import { useTodaysCompletions } from '@/src/hooks/use-todays-completions';
-import { useTodaysRests } from '@/src/hooks/use-todays-rests';
 import { useDailyOutcome } from '@/src/hooks/use-daily-outcome';
-import { useVisionStatement } from '@/src/hooks/use-vision-statement';
 import { useRollingConsistency } from '@/src/hooks/use-rolling-consistency';
 import { useTaskRestCredits } from '@/src/hooks/use-task-rest-credits';
-import { supabase } from '@/src/lib/supabase';
-import { getTodayISODate } from '@/src/lib/date-utils';
+import { useTodaysCompletions } from '@/src/hooks/use-todays-completions';
+import { useTodaysRests } from '@/src/hooks/use-todays-rests';
+import { useTodaysTasks } from '@/src/hooks/use-todays-tasks';
+import { useVisionStatement } from '@/src/hooks/use-vision-statement';
+import { getLocalDateYYYYMMDD } from '@/src/lib/date-utils';
 import { isTaskEligibleForRest } from '@/src/lib/rest-utils';
+import { supabase } from '@/src/lib/supabase';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { router } from 'expo-router';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
 export default function HomeScreen() {
   const { tasks, loading: tasksLoading, error: tasksError, refetch: refetchTasks } = useTodaysTasks();
   const { completedTaskIds, loading: completionsLoading, error: completionsError, refetch: refetchCompletions } = useTodaysCompletions();
   const { restedTaskIds, loading: restsLoading, error: restsError, refetch: refetchRests } = useTodaysRests();
   const { visionStatement } = useVisionStatement();
-  const { completionPct: rollingCompletionPct, eligibleCount, completedCount, loading: consistencyLoading } = useRollingConsistency();
+  const { completionPct: rollingCompletionPct, eligibleCount, completedCount, loading: consistencyLoading, refetch: refetchRollingConsistency } = useRollingConsistency();
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [completingTask, setCompletingTask] = useState(false);
@@ -38,6 +39,29 @@ export default function HomeScreen() {
   
   // Fetch rest credits for the task being rested (when actionSheetTaskId is set)
   const { credits: restCredits, loading: restCreditsLoading, refetch: refetchRestCredits } = useTaskRestCredits(actionSheetTaskId);
+
+  // Centralized cleanup helper - resets all modal and pending state
+  // Must be bulletproof and called in finally blocks
+  const resetOverlays = () => {
+    setConfirmModalVisible(false);
+    setRestConfirmModalVisible(false);
+    setActionSheetVisible(false);
+    setPendingTaskId(null);
+    setActionSheetTaskId(null);
+    setCompletingTask(false);
+    setRestingTask(false);
+  };
+
+  // Minimal dev logging for overlay visibility changes (only in development)
+  useEffect(() => {
+    if (__DEV__ && (confirmModalVisible || actionSheetVisible || restConfirmModalVisible)) {
+      console.log('[HomeScreen overlays]', {
+        confirmModalVisible,
+        actionSheetVisible,
+        restConfirmModalVisible,
+      });
+    }
+  }, [confirmModalVisible, actionSheetVisible, restConfirmModalVisible]);
 
   // Helper to truncate text to ~140-160 characters
   const truncateText = (text: string, maxLength: number = 150): string => {
@@ -90,12 +114,12 @@ export default function HomeScreen() {
     const isCompleted = completedTaskIds.has(taskId);
     const isRested = restedTaskIds.has(taskId);
     
-    // If completed or rested, no action
+    // If completed or rested, no action (including no rest action)
     if (isCompleted || isRested) {
       return;
     }
 
-    // Only show action sheet for eligible tasks
+    // Only show action sheet for eligible tasks that are not completed or rested
     if (isTaskEligibleForRest(taskTitle)) {
       setActionSheetTaskId(taskId);
       setActionSheetVisible(true);
@@ -103,32 +127,25 @@ export default function HomeScreen() {
   };
 
   const confirmTaskCompletion = async () => {
-    if (!pendingTaskId) {
-      setConfirmModalVisible(false);
-      setPendingTaskId(null);
-      return;
-    }
-
-    // Safety check: cannot complete if already rested
-    if (restedTaskIds.has(pendingTaskId)) {
-      Alert.alert('Cannot complete', 'This task is already rested.');
-      setConfirmModalVisible(false);
-      setPendingTaskId(null);
-      return;
-    }
-
     setCompletingTask(true);
     try {
+      if (!pendingTaskId) {
+        throw new Error('No pending task ID');
+      }
+
+      // Safety check: cannot complete if already rested
+      if (restedTaskIds.has(pendingTaskId)) {
+        Alert.alert('Cannot complete', 'This task is already rested.');
+        throw new Error('Task already rested');
+      }
+
       const { data: { user }, error: authError } = await supabase.auth.getUser();
       if (authError || !user) {
         console.error('[HomeScreen] Error getting user:', authError);
-        setConfirmModalVisible(false);
-        setPendingTaskId(null);
-        setCompletingTask(false);
-        return;
+        throw new Error('Failed to get user');
       }
 
-      const today = getTodayISODate();
+      const today = getLocalDateYYYYMMDD();
       const { error: insertError } = await supabase
         .from('task_completions')
         .insert({
@@ -151,18 +168,18 @@ export default function HomeScreen() {
 
       // Refresh completions to update UI (optimistic update alternative would work too)
       await refetchCompletions();
+      // Refetch rolling consistency after completion (optional polish)
+      await refetchRollingConsistency();
     } catch (err) {
       console.error('[HomeScreen] Unexpected error completing task:', err);
     } finally {
-      setCompletingTask(false);
-      setConfirmModalVisible(false);
-      setPendingTaskId(null);
+      // ALWAYS cleanup state, regardless of success or failure
+      resetOverlays();
     }
   };
 
   const cancelTaskCompletion = () => {
-    setConfirmModalVisible(false);
-    setPendingTaskId(null);
+    resetOverlays();
   };
 
   const handleActionSheetComplete = () => {
@@ -174,78 +191,92 @@ export default function HomeScreen() {
   };
 
   const handleActionSheetRest = () => {
+    // Close ActionSheet first
     setActionSheetVisible(false);
     // Fetch credits before showing modal
     refetchRestCredits();
-    setRestConfirmModalVisible(true);
+    // Delay opening rest modal to avoid modal overlay conflicts
+    // Use requestAnimationFrame for proper sequencing
+    requestAnimationFrame(() => {
+      setRestConfirmModalVisible(true);
+    });
   };
 
   const cancelActionSheet = () => {
-    setActionSheetVisible(false);
-    setActionSheetTaskId(null);
+    resetOverlays();
   };
 
   const confirmTaskRest = async () => {
-    if (!actionSheetTaskId) {
-      setRestConfirmModalVisible(false);
-      setActionSheetTaskId(null);
-      return;
-    }
-
-    // Check if task is already completed (shouldn't happen, but safety check)
-    if (completedTaskIds.has(actionSheetTaskId)) {
-      Alert.alert('Cannot rest', 'This task is already completed.');
-      setRestConfirmModalVisible(false);
-      setActionSheetTaskId(null);
-      return;
-    }
-
+    const taskIdToRest = actionSheetTaskId;
+    
     setRestingTask(true);
     try {
+      if (!taskIdToRest) {
+        throw new Error('No task ID to rest');
+      }
+
+      // Check if task is already completed or rested (shouldn't happen, but safety check)
+      if (completedTaskIds.has(taskIdToRest)) {
+        Alert.alert('Cannot rest', 'This task is already completed.');
+        throw new Error('Task already completed');
+      }
+
+      if (restedTaskIds.has(taskIdToRest)) {
+        Alert.alert('Already rested', 'This task is already rested today.');
+        throw new Error('Task already rested');
+      }
+
       // Call RPC function to enforce limits and insert rest server-side
-      const { data, error: rpcError } = await supabase.rpc('rest_task_today', {
-        p_task_id: actionSheetTaskId,
-      });
+      const payload = { p_task_id: taskIdToRest };
+      const { data, error: rpcError } = await supabase.rpc('rest_task_today', payload);
 
       if (rpcError) {
+        // Enhanced error logging with actionable details
+        console.error('[HomeScreen] rest_task_today RPC Error:', {
+          message: rpcError.message,
+          details: rpcError.details,
+          hint: rpcError.hint,
+          code: rpcError.code,
+          payloadKeys: Object.keys(payload),
+          payload: payload,
+        });
+        
         // Handle specific error messages from RPC
         const errorMessage = rpcError.message;
         if (errorMessage.includes('No rest credits remaining')) {
           Alert.alert('No rest credits remaining', 'No rest credits remaining for this task this month.');
-        } else if (errorMessage.includes('already rested today')) {
-          Alert.alert('Already rested', 'This task is already rested today.');
+        } else if (errorMessage.includes('already rested today') || errorMessage.includes('Task already rested today')) {
+          // Unique constraint violation - treat as success and refresh
+          console.log('[HomeScreen] Task already rested (unique constraint), refreshing...');
+          await refetchRests();
+          await refetchRestCredits();
+          // Don't show error, just refresh and close
         } else if (errorMessage.includes('Rest not available')) {
           Alert.alert('Rest not available', 'Rest is not available for this task.');
         } else {
           Alert.alert('Error', errorMessage || 'Failed to rest task. Please try again.');
         }
-        setRestConfirmModalVisible(false);
-        setActionSheetTaskId(null);
-        setRestingTask(false);
-        return;
+      } else {
+        // Success - refresh UI state
+        await refetchRests();
+        await refetchRestCredits();
+        // Refetch rolling consistency after rest (optional polish)
+        await refetchRollingConsistency();
       }
-
-      // Success - refresh UI state
-      await refetchRests();
-      await refetchRestCredits();
-      
-      // Also refetch consistency and streaks if needed (they may depend on rests)
-      // Note: These hooks may auto-refetch, but we ensure it here
-      
-      // Close modal
-      setRestConfirmModalVisible(false);
-      setActionSheetTaskId(null);
     } catch (err) {
       console.error('[HomeScreen] Unexpected error resting task:', err);
-      Alert.alert('Error', 'Failed to rest task. Please try again.');
+      // Only show alert if it's not already shown above
+      if (err instanceof Error && !err.message.includes('already')) {
+        Alert.alert('Error', 'Failed to rest task. Please try again.');
+      }
     } finally {
-      setRestingTask(false);
+      // ALWAYS cleanup UI state, regardless of success or failure
+      resetOverlays();
     }
   };
 
   const cancelTaskRest = () => {
-    setRestConfirmModalVisible(false);
-    setActionSheetTaskId(null);
+    resetOverlays();
   };
 
   const handleAddCommitments = () => {
@@ -347,7 +378,7 @@ export default function HomeScreen() {
                         <Text style={styles.taskDuration}>{task.duration_minutes} min</Text>
                       )}
                       {isRested && (
-                        <Text style={styles.restedLabel}>Rested</Text>
+                        <Text style={styles.restedLabel}>Rested today</Text>
                       )}
                     </View>
                     <View style={[
@@ -356,6 +387,9 @@ export default function HomeScreen() {
                       isRested && styles.checkboxRested,
                     ]}>
                       {isCompleted && <Text style={styles.checkmark}>✓</Text>}
+                      {isRested && !isCompleted && (
+                        <MaterialIcons name="bedtime" size={16} color="#888" />
+                      )}
                     </View>
                   </TouchableOpacity>
                 );
@@ -409,109 +443,119 @@ export default function HomeScreen() {
         )}
       </ScrollView>
 
-      {/* Confirmation Modal */}
-      <Modal
-        visible={confirmModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={cancelTaskCompletion}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Mark as complete?</Text>
-            <Text style={styles.modalBody}>This locks for today.</Text>
-            <View style={styles.modalButtons}>
+      {/* Confirmation Modal - View-based overlay to avoid native Modal ghost overlay issues */}
+      {confirmModalVisible && (
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={cancelTaskCompletion}
+          />
+          <View style={styles.modalOverlay} pointerEvents="box-none">
+            <View style={styles.modalContent} pointerEvents="auto">
+              <Text style={styles.modalTitle}>Mark as complete?</Text>
+              <Text style={styles.modalBody}>This locks for today.</Text>
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonCancel]}
+                  onPress={cancelTaskCompletion}>
+                  <Text style={styles.modalButtonCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonConfirm, completingTask && styles.modalButtonDisabled]}
+                  onPress={confirmTaskCompletion}
+                  disabled={completingTask}>
+                  {completingTask ? (
+                    <ActivityIndicator size="small" color="#000" />
+                  ) : (
+                    <Text style={styles.modalButtonConfirmText}>Complete</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/* ActionSheet - View-based overlay to avoid native Modal ghost overlay issues */}
+      {actionSheetVisible && (
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => {
+              if (__DEV__) {
+                console.log('[HomeScreen] ActionSheet overlay tapped');
+              }
+              cancelActionSheet();
+            }}
+          />
+          <View style={styles.actionSheetOverlay} pointerEvents="box-none">
+            <View style={styles.actionSheetContent} pointerEvents="auto">
               <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonCancel]}
-                onPress={cancelTaskCompletion}>
-                <Text style={styles.modalButtonCancelText}>Cancel</Text>
+                style={styles.actionSheetOption}
+                onPress={handleActionSheetComplete}>
+                <Text style={styles.actionSheetOptionText}>Mark Complete</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonConfirm, completingTask && styles.modalButtonDisabled]}
-                onPress={confirmTaskCompletion}
-                disabled={completingTask}>
-                {completingTask ? (
-                  <ActivityIndicator size="small" color="#000" />
-                ) : (
-                  <Text style={styles.modalButtonConfirmText}>Complete</Text>
-                )}
+                style={styles.actionSheetOption}
+                onPress={handleActionSheetRest}>
+                <Text style={styles.actionSheetOptionText}>Rest this task today</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionSheetOption, styles.actionSheetCancel]}
+                onPress={cancelActionSheet}>
+                <Text style={styles.actionSheetCancelText}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
-      </Modal>
+      )}
 
-      {/* ActionSheet Modal */}
-      <Modal
-        visible={actionSheetVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={cancelActionSheet}>
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={cancelActionSheet}>
-          <View style={styles.actionSheetContent}>
-            <TouchableOpacity
-              style={styles.actionSheetOption}
-              onPress={handleActionSheetComplete}>
-              <Text style={styles.actionSheetOptionText}>Mark Complete</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.actionSheetOption}
-              onPress={handleActionSheetRest}>
-              <Text style={styles.actionSheetOptionText}>Rest this task today</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.actionSheetOption, styles.actionSheetCancel]}
-              onPress={cancelActionSheet}>
-              <Text style={styles.actionSheetCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Rest Confirmation Modal */}
-      <Modal
-        visible={restConfirmModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={cancelTaskRest}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Rest this task today?</Text>
-            <Text style={styles.modalBody}>
-              {restCreditsLoading ? (
-                'Loading rest credits...'
-              ) : restCredits ? (
-                restCredits.monthly_limit === 0 ? (
-                  'This task doesn\'t support rest.'
+      {/* Rest Confirmation Modal - View-based overlay to avoid native Modal ghost overlay issues */}
+      {restConfirmModalVisible && (
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={cancelTaskRest}
+          />
+          <View style={styles.modalOverlay} pointerEvents="box-none">
+            <View style={styles.modalContent} pointerEvents="auto">
+              <Text style={styles.modalTitle}>Rest this task today?</Text>
+              <Text style={styles.modalBody}>
+                {restCreditsLoading ? (
+                  'Loading rest credits...'
+                ) : restCredits ? (
+                  restCredits.limit === 0 ? (
+                    'This task doesn\'t support rest.'
+                  ) : restCredits.remaining === 0 ? (
+                    'No rest credits remaining this month.'
+                  ) : (
+                    `You have ${restCredits.remaining} rest credit${restCredits.remaining === 1 ? '' : 's'} remaining this month for this task. Uses 1 rest credit. This task won't count against today.`
+                  )
                 ) : (
-                  `Uses 1 rest credit. You have ${restCredits.remaining}/${restCredits.monthly_limit} remaining this month.`
-                )
-              ) : (
-                'Uses 1 rest credit. This task won\'t count against today.'
-              )}
-            </Text>
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonCancel]}
-                onPress={cancelTaskRest}>
-                <Text style={styles.modalButtonCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonConfirm, (restingTask || restCreditsLoading || (restCredits && (restCredits.monthly_limit === 0 || restCredits.remaining === 0))) && styles.modalButtonDisabled]}
-                onPress={confirmTaskRest}
-                disabled={restingTask || restCreditsLoading || (restCredits && (restCredits.monthly_limit === 0 || restCredits.remaining === 0))}>
-                {restingTask ? (
-                  <ActivityIndicator size="small" color="#000" />
-                ) : (
-                  <Text style={styles.modalButtonConfirmText}>Rest</Text>
+                  'Uses 1 rest credit. This task won\'t count against today.'
                 )}
-              </TouchableOpacity>
+              </Text>
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonCancel]}
+                  onPress={cancelTaskRest}>
+                  <Text style={styles.modalButtonCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonConfirm, (restingTask || restCreditsLoading || (restCredits && (restCredits.limit === 0 || restCredits.remaining === 0))) && styles.modalButtonDisabled]}
+                  onPress={confirmTaskRest}
+                  disabled={!!(restingTask || restCreditsLoading || (restCredits && (restCredits.limit === 0 || restCredits.remaining === 0)))}>
+                  {restingTask ? (
+                    <ActivityIndicator size="small" color="#000" />
+                  ) : (
+                    <Text style={styles.modalButtonConfirmText}>Rest</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </View>
-      </Modal>
+      )}
     </SafeAreaView>
   );
 }
@@ -582,7 +626,7 @@ const styles = StyleSheet.create({
   taskRowRested: {
     backgroundColor: '#1a1a1a',
     borderColor: '#444',
-    opacity: 0.6,
+    opacity: 0.7,
   },
   taskContent: {
     flex: 1,
@@ -600,6 +644,7 @@ const styles = StyleSheet.create({
   },
   taskTitleRested: {
     color: '#888',
+    fontStyle: 'italic',
   },
   taskDuration: {
     fontSize: 12,
@@ -627,6 +672,8 @@ const styles = StyleSheet.create({
   checkboxRested: {
     borderColor: '#666',
     backgroundColor: 'transparent',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   checkmark: {
     color: '#000',
@@ -707,6 +754,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  actionSheetOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'flex-end',
     alignItems: 'center',
     padding: 20,
   },

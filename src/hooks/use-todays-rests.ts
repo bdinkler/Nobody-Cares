@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/src/lib/supabase';
-import { getTodayISODate } from '@/src/lib/date-utils';
+import { getLocalDateYYYYMMDD } from '@/src/lib/date-utils';
 
 /**
  * Hook to fetch and manage today's task rests from Supabase.
@@ -24,7 +24,7 @@ export function useTodaysRests() {
         return;
       }
 
-      const today = getTodayISODate();
+      const today = getLocalDateYYYYMMDD();
       const { data, error: restsError } = await supabase
         .from('task_rests')
         .select('task_id')

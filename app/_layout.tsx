@@ -10,6 +10,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { supabase } from '@/src/lib/supabase';
 import { useOnboardingStatus } from '@/src/hooks/use-onboarding-status';
 import { OnboardingProvider } from '@/src/contexts/onboarding-context';
+import { ensureProfileTimezone } from '@/src/lib/timezone-utils';
 
 type SessionState = 'loading' | 'signed_out' | 'signed_in';
 
@@ -28,22 +29,36 @@ export default function RootLayout() {
     setSessionState('loading');
 
     // Get initial session
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
+    supabase.auth.getSession().then(async ({ data: { session }, error }) => {
       if (error) {
         console.error('[RootLayout] getSession error:', error);
       }
       console.log('[RootLayout] getSession complete:', session ? 'Session found' : 'No session');
       setSession(session);
       setSessionState(session ? 'signed_in' : 'signed_out');
+      
+      // If user is signed in, ensure their profile timezone is set from device
+      if (session) {
+        ensureProfileTimezone().catch((error) => {
+          console.error('[RootLayout] Error ensuring profile timezone on initial load:', error);
+        });
+      }
     });
 
     // Subscribe to auth state changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log('[RootLayout] onAuthStateChange:', event, session ? 'Session' : 'No session');
       setSession(session);
       setSessionState(session ? 'signed_in' : 'signed_out');
+      
+      // When user signs in, ensure their profile timezone is set from device
+      if (session && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
+        ensureProfileTimezone().catch((error) => {
+          console.error('[RootLayout] Error ensuring profile timezone:', error);
+        });
+      }
     });
 
     return () => {

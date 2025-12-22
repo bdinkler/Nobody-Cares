@@ -28,31 +28,30 @@ export function useRollingConsistency() {
         return;
       }
 
-      const { data: consistencyData, error: fetchError } = await supabase
-        .from('user_rolling_30d_consistency')
-        .select('*')
-        .eq('user_id', user.id)
-        .single();
+      // Use RPC function that computes "today" based on user's timezone
+      // This ensures calendar day boundaries align with user's local midnight
+      // Note: RPC functions return arrays, so we need to access the first element
+      const { data: consistencyDataArray, error: fetchError } = await supabase
+        .rpc('get_my_rolling_30d_consistency');
 
       if (fetchError) {
-        // If no row found, user might have no active tasks or no data yet
-        if (fetchError.code === 'PGRST116') {
-          // No rows returned - return zero values
-          setData({
-            user_id: user.id,
-            window_start: new Date().toISOString().split('T')[0],
-            window_end: new Date().toISOString().split('T')[0],
-            eligible_instances: 0,
-            completed_instances: 0,
-            completion_pct: 0,
-          });
-        } else {
-          console.error('[useRollingConsistency] Error fetching consistency:', fetchError);
-          setError(fetchError.message);
-          setData(null);
-        }
+        console.error('[useRollingConsistency] Error fetching consistency:', fetchError);
+        setError(fetchError.message);
+        setData(null);
+      } else if (consistencyDataArray && consistencyDataArray.length > 0) {
+        // RPC returns array - take first row
+        setData(consistencyDataArray[0]);
       } else {
-        setData(consistencyData);
+        // No data returned - return zero values as fallback
+        console.warn('[useRollingConsistency] No data returned from RPC, using zero values');
+        setData({
+          user_id: user.id,
+          window_start: new Date().toISOString().split('T')[0],
+          window_end: new Date().toISOString().split('T')[0],
+          eligible_instances: 0,
+          completed_instances: 0,
+          completion_pct: 0,
+        });
       }
     } catch (err) {
       console.error('[useRollingConsistency] Unexpected error:', err);
