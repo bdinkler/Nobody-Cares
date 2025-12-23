@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import { supabase } from '@/src/lib/supabase';
 import { useOnboardingRefresh } from '@/src/contexts/onboarding-context';
 import { ensureProfileTimezone } from '@/src/lib/timezone-utils';
+import { getEarlyAccessAck } from '@/src/lib/subscription';
 
 export default function RulesScreen() {
   const [agreed, setAgreed] = useState(false);
@@ -53,8 +54,16 @@ export default function RulesScreen() {
 
       // Refresh onboarding status to mark onboarding as complete
       refresh();
-      // Navigate to paywall after onboarding is complete
-      router.replace('/(paywall)');
+      
+      // Check if early access has already been acknowledged
+      const hasAcknowledged = await getEarlyAccessAck();
+      if (hasAcknowledged) {
+        // If already acknowledged, go directly to tabs
+        router.replace('/(tabs)');
+      } else {
+        // If not acknowledged, show Early Access screen
+        router.replace('/(paywall)');
+      }
     } catch (error) {
       Alert.alert('Error', 'An unexpected error occurred');
       setLoading(false);

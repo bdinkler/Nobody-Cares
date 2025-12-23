@@ -285,28 +285,6 @@ export default function EditProfileScreen() {
     }
   };
 
-  const handleDeleteAccount = async () => {
-    Alert.alert(
-      'Delete Account',
-      'Are you sure you want to delete your account? This action cannot be undone and will permanently delete all your data.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete Account',
-          style: 'destructive',
-          onPress: async () => {
-            // Note: User account deletion requires admin privileges or an RPC function
-            // For MVP, we'll show instructions to contact support
-            Alert.alert(
-              'Account Deletion',
-              'To delete your account, please contact support or use the Supabase Dashboard. Account deletion requires admin privileges for security reasons.',
-              [{ text: 'OK' }]
-            );
-          },
-        },
-      ]
-    );
-  };
 
   if (profileLoading || loadingNotifications) {
     return (
@@ -410,14 +388,6 @@ export default function EditProfileScreen() {
             </View>
           </View>
         </View>
-
-        {/* Delete Account Button */}
-        <TouchableOpacity
-          style={styles.logoutButton}
-          onPress={handleDeleteAccount}
-          activeOpacity={0.7}>
-          <Text style={styles.logoutButtonText}>Delete Account</Text>
-        </TouchableOpacity>
       </ScrollView>
 
       {/* Save Button (Fixed at bottom) */}
@@ -548,21 +518,6 @@ const styles = StyleSheet.create({
   },
   toggleLabelContainer: {
     flex: 1,
-  },
-  logoutButton: {
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    backgroundColor: '#1a0a0a',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ff4444',
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  logoutButtonText: {
-    fontSize: 16,
-    color: '#ff4444',
-    fontWeight: '600',
   },
   saveButtonContainer: {
     position: 'absolute',

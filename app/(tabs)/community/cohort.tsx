@@ -25,6 +25,7 @@ export default function CohortScreen() {
         <View style={styles.header}>
           <Text style={styles.title}>{getMonthName()} Cohort</Text>
           <Text style={styles.subtitle}>20 members • Resets {getNextMonthName()} 1</Text>
+          <Text style={styles.explanation}>Cohorts reset monthly. Rankings are based on task completion consistency.</Text>
         </View>
 
         {/* Rankings Placeholder */}
@@ -60,6 +61,12 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     color: '#999',
+    marginBottom: 8,
+  },
+  explanation: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 4,
   },
   rankingsContainer: {
     backgroundColor: '#111',

@@ -24,3 +24,82 @@ export function getLocalDateYYYYMMDD(): string {
   return `${year}-${month}-${day}`;
 }
 
+/**
+ * Format a date string for display in feed posts.
+ * Returns "Today", "Yesterday", or a formatted date string.
+ */
+export function formatPostDate(dateString: string): string {
+  const date = new Date(dateString);
+  const now = new Date();
+  
+  // Get dates at midnight in local timezone for comparison
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const postDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  
+  if (postDate.getTime() === today.getTime()) {
+    return 'Today';
+  }
+  
+  if (postDate.getTime() === yesterday.getTime()) {
+    return 'Yesterday';
+  }
+  
+  // Format as "Jan 15" or "Jan 15, 2024" if different year
+  const isCurrentYear = postDate.getFullYear() === today.getFullYear();
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    ...(isCurrentYear ? {} : { year: 'numeric' }),
+  });
+}
+
+/**
+ * Format a timestamp for display in feed posts with time.
+ * Returns "Today • 12:05 PM", "Yesterday • 9:14 AM", or "Dec 22 • 12:05 PM"
+ */
+export function formatPostTimestamp(createdAt: string | null | undefined): string {
+  if (!createdAt) {
+    return '';
+  }
+
+  try {
+    const date = new Date(createdAt);
+    const now = new Date();
+    
+    // Get dates at midnight in local timezone for comparison
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const postDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    
+    // Format time in 12-hour format
+    const timeStr = date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+    
+    let dateStr: string;
+    if (postDate.getTime() === today.getTime()) {
+      dateStr = 'Today';
+    } else if (postDate.getTime() === yesterday.getTime()) {
+      dateStr = 'Yesterday';
+    } else {
+      // Format as "Dec 22" or "Dec 22, 2025" if different year
+      const isCurrentYear = postDate.getFullYear() === today.getFullYear();
+      dateStr = date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        ...(isCurrentYear ? {} : { year: 'numeric' }),
+      });
+    }
+    
+    return `${dateStr} • ${timeStr}`;
+  } catch (err) {
+    console.error('[formatPostTimestamp] Error formatting timestamp:', err);
+    return '';
+  }
+}
+

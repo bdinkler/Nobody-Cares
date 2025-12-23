@@ -4,26 +4,26 @@ import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from '@/src/lib/supabase';
 import { useOnboardingStatus } from '@/src/hooks/use-onboarding-status';
-import { getIsSubscribed } from '@/src/lib/subscription';
+import { getEarlyAccessAck } from '@/src/lib/subscription';
 
 type SessionState = 'loading' | 'signed_out' | 'signed_in';
 
 export default function Index() {
   const [session, setSession] = useState<Session | null>(null);
   const [sessionState, setSessionState] = useState<SessionState>('loading');
-  const [subscribed, setSubscribed] = useState<boolean | null>(null);
+  const [earlyAccessAck, setEarlyAccessAck] = useState<boolean | null>(null);
   const { status, loading: onboardingLoading } = useOnboardingStatus(
     sessionState === 'signed_in' ? session : null
   );
 
-  // Load subscription status
+  // Load early access acknowledgement status
   useEffect(() => {
-    const loadSubscription = async () => {
-      const value = await getIsSubscribed();
-      setSubscribed(value);
-      console.log('[Index] subscribed=', value);
+    const loadEarlyAccessAck = async () => {
+      const value = await getEarlyAccessAck();
+      setEarlyAccessAck(value);
+      console.log('[Index] earlyAccessAck=', value);
     };
-    loadSubscription();
+    loadEarlyAccessAck();
   }, []);
 
   useEffect(() => {
@@ -87,11 +87,11 @@ export default function Index() {
     return <Redirect href="/(onboarding)/ownership" />;
   }
 
-  // Signed in and onboarding complete -> check subscription
+  // Signed in and onboarding complete -> check early access acknowledgement
   if (sessionState === 'signed_in' && status === 'complete') {
-    // Show loading while subscription status is being loaded
-    if (subscribed === null) {
-      console.log('[Index] Rendering: Loading (checking subscription)');
+    // Show loading while early access ack status is being loaded
+    if (earlyAccessAck === null) {
+      console.log('[Index] Rendering: Loading (checking early access ack)');
       return (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#fff" />
@@ -99,15 +99,15 @@ export default function Index() {
       );
     }
 
-    // If no active subscription -> redirect to paywall
-    if (!subscribed) {
-      console.log('[Index] Rendering: Redirect to /(paywall) (no subscription)');
+    // If early access not acknowledged -> redirect to Early Access screen
+    if (!earlyAccessAck) {
+      console.log('[Index] Rendering: Redirect to /(paywall) (no early access ack)');
       return <Redirect href="/(paywall)" />;
     }
 
-    // If has active subscription -> redirect to tabs
-    if (subscribed) {
-      console.log('[Index] Rendering: Redirect to /(tabs) (has subscription)');
+    // If early access acknowledged -> redirect to tabs (regardless of subscription status)
+    if (earlyAccessAck) {
+      console.log('[Index] Rendering: Redirect to /(tabs) (early access acknowledged)');
       return <Redirect href="/(tabs)" />;
     }
   }

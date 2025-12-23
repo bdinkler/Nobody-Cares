@@ -8,26 +8,19 @@ import {
   ActivityIndicator,
   SafeAreaView,
   RefreshControl,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '@/src/lib/supabase';
 import { useProfile } from '@/src/hooks/use-profile';
-
-type Post = {
-  id: string;
-  author_id: string;
-  body: string;
-  created_at: string;
-  image_urls?: string[] | null;
-};
-
-type PostWithAuthor = Post & {
-  author_first_name: string | null;
-  author_avatar_url: string | null;
-  author_streak: number;
-};
+import { useFeed } from '@/src/hooks/use-feed';
+import { formatPostTimestamp } from '@/src/lib/date-utils';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 type CohortRanking = {
   user_id: string;
@@ -40,17 +33,26 @@ type CohortRanking = {
 
 export default function CommunityScreen() {
   const { firstName, avatarUrl } = useProfile();
+  const { posts, loading, error, refetch: refetchFeed, toggleLike, createPost, deletePost } = useFeed();
   const [selectedTab, setSelectedTab] = useState<'cohort' | 'feed'>('feed');
-  const [posts, setPosts] = useState<PostWithAuthor[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const isFetchingRef = useRef(false);
-  const hasFetchedRef = useRef(false);
+  
+  // Inline composer state
+  const [composerText, setComposerText] = useState('');
+  const [isPosting, setIsPosting] = useState(false);
   
   // Cohort rankings state
   const [cohortId, setCohortId] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [rankings, setRankings] = useState<CohortRanking[]>([]);
+  
+  // Get current user ID on mount (used for both feed and cohort)
+  useEffect(() => {
+    const getCurrentUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setCurrentUserId(user?.id || null);
+    };
+    getCurrentUser();
+  }, []);
   const [memberCount, setMemberCount] = useState<number | null>(null);
   const [resetsOn, setResetsOn] = useState<string | null>(null);
   const [monthName, setMonthName] = useState<string | null>(null);
@@ -60,112 +62,51 @@ export default function CommunityScreen() {
   const isFetchingRankingsRef = useRef(false);
   const hasFetchedRankingsRef = useRef(false);
 
-  const fetchPosts = useCallback(async () => {
-    // Guard: prevent overlapping calls
-    if (isFetchingRef.current) {
+  // Handle inline post creation
+  const handlePost = useCallback(async () => {
+    if (!composerText.trim() || isPosting) {
       return;
     }
 
-    // Guard: only fetch if Feed tab is selected
-    if (selectedTab !== 'feed') {
-      return;
-    }
-
+    setIsPosting(true);
     try {
-      isFetchingRef.current = true;
-      setLoading(true);
-      setError(null);
-
-      // Fetch posts (newest first, limit 20)
-      // Only query global scope posts to avoid cohort-related RLS recursion
-      const { data: postsData, error: postsError } = await supabase
-        .from('posts')
-        .select('id, author_id, body, created_at, image_urls, scope')
-        .eq('scope', 'global')
-        .order('created_at', { ascending: false })
-        .limit(20);
-
-      if (postsError) {
-        console.error('[CommunityScreen] Error fetching posts:', postsError);
-        setError(postsError.message);
-        setLoading(false);
-        isFetchingRef.current = false;
-        return;
-      }
-
-      if (!postsData || postsData.length === 0) {
-        setPosts([]);
-        setLoading(false);
-        isFetchingRef.current = false;
-        hasFetchedRef.current = true;
-        return;
-      }
-
-      // Get unique author IDs
-      const authorIds = [...new Set(postsData.map((p) => p.author_id))];
-
-      // Fetch profiles for all authors
-      const { data: profilesData, error: profilesError } = await supabase
-        .from('profiles')
-        .select('id, first_name, avatar_url')
-        .in('id', authorIds);
-
-      if (profilesError) {
-        console.error('[CommunityScreen] Error fetching profiles:', profilesError);
-        // Continue with empty profiles
-      }
-
-      // Fetch streaks for all authors using timezone-safe RPC
-      // Call RPC for each author (could be optimized with a batch function later)
-      const streaksPromises = authorIds.map(async (authorId) => {
-        const { data: streakDataArray, error: streakError } = await supabase
-          .rpc('get_execution_streaks', { p_user_id: authorId });
-        
-        if (streakError) {
-          console.error(`[CommunityScreen] Error fetching streak for user ${authorId}:`, streakError);
-          return { user_id: authorId, current_streak_days: 0 };
-        }
-        
-        const streakData = streakDataArray && streakDataArray.length > 0 ? streakDataArray[0] : null;
-        return {
-          user_id: authorId,
-          current_streak_days: streakData?.current_streak_days ?? 0,
-        };
-      });
-      
-      const streaksData = await Promise.all(streaksPromises);
-
-      // Create maps for easy lookup
-      const profilesMap = new Map(
-        (profilesData || []).map((p) => [p.id, { first_name: p.first_name, avatar_url: p.avatar_url }])
-      );
-      const streaksMap = new Map(
-        (streaksData || []).map((s) => [s.user_id, s.current_streak_days ?? 0])
-      );
-
-      // Combine posts with author info and streaks
-      const postsWithAuthors: PostWithAuthor[] = postsData.map((post) => {
-        const profile = profilesMap.get(post.author_id);
-        const streak = streaksMap.get(post.author_id) ?? 0;
-
-        return {
-          ...post,
-          author_first_name: profile?.first_name || null,
-          author_avatar_url: profile?.avatar_url || null,
-          author_streak: streak,
-        };
-      });
-
-      setPosts(postsWithAuthors);
-      hasFetchedRef.current = true;
+      await createPost(composerText);
+      setComposerText('');
     } catch (err) {
-      console.error('[CommunityScreen] Unexpected error:', err);
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      console.error('[CommunityScreen] Error creating post:', err);
+      // Error is handled by the hook
     } finally {
-      setLoading(false);
-      isFetchingRef.current = false;
+      setIsPosting(false);
     }
-  }, [selectedTab]);
+  }, [composerText, isPosting, createPost]);
+
+  // Handle post deletion
+  const handleDeletePost = useCallback((postId: string) => {
+    Alert.alert(
+      'Delete Post',
+      'Delete this post? This can\'t be undone.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deletePost(postId);
+            } catch (err: any) {
+              // Show user-friendly error
+              const errorMessage = err?.message || 'Failed to delete post. Please try again.';
+              Alert.alert('Error', errorMessage);
+            }
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  }, [deletePost]);
 
   // Fetch cohort rankings
   const fetchRankings = useCallback(async () => {
@@ -477,17 +418,13 @@ export default function CommunityScreen() {
         // Reset the hasFetched flag to allow refetch
         hasFetchedRankingsRef.current = false;
         fetchRankings();
-      } else if (selectedTab === 'feed' && !hasFetchedRef.current && !isFetchingRef.current) {
-        // Feed tab: only fetch if not already fetched
-        fetchPosts();
+      } else if (selectedTab === 'feed') {
+        // Feed tab: refetch when screen gains focus
+        refetchFeed();
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedTab])
+    }, [selectedTab, refetchFeed])
   );
-
-  const handleNewPostPress = () => {
-    router.push('/community/new-post');
-  };
 
   const getInitials = (name: string | null): string => {
     if (!name) return '?';
@@ -529,20 +466,6 @@ export default function CommunityScreen() {
     return `${count} member${count === 1 ? '' : 's'}`;
   };
 
-  const formatPostDate = (dateString: string): string => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return 'just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  };
 
   // Pull-to-refresh handlers
   const [refreshing, setRefreshing] = useState(false);
@@ -555,14 +478,12 @@ export default function CommunityScreen() {
         hasFetchedRankingsRef.current = false;
         await fetchRankings();
       } else if (selectedTab === 'feed') {
-        // Reset flags to allow refetch
-        hasFetchedRef.current = false;
-        await fetchPosts();
+        await refetchFeed();
       }
     } finally {
       setRefreshing(false);
     }
-  }, [selectedTab, fetchRankings, fetchPosts]);
+  }, [selectedTab, fetchRankings, refetchFeed]);
 
   // Only show full-screen loading on initial mount when Feed tab is default
   // Otherwise, show inline loading in Feed view
@@ -589,9 +510,14 @@ export default function CommunityScreen() {
           <TouchableOpacity
             style={[styles.tab, selectedTab === 'feed' && styles.tabActive]}
             onPress={() => {
-              setSelectedTab('feed');
-              if (!hasFetchedRef.current && !isFetchingRef.current) {
-                fetchPosts();
+              // Only switch and refetch if not already on feed tab
+              if (selectedTab !== 'feed') {
+                if (__DEV__) console.log('[CommunityScreen] Switching to Feed tab');
+                setSelectedTab('feed');
+                // Refetch feed if not currently loading (prevents spam)
+                if (!loading) {
+                  refetchFeed();
+                }
               }
             }}
             activeOpacity={0.7}>
@@ -602,9 +528,14 @@ export default function CommunityScreen() {
           <TouchableOpacity
             style={[styles.tab, selectedTab === 'cohort' && styles.tabActive]}
             onPress={() => {
-              setSelectedTab('cohort');
-              if (!hasFetchedRankingsRef.current && !isFetchingRankingsRef.current) {
-                fetchRankings();
+              // Only switch and refetch if not already on cohort tab
+              if (selectedTab !== 'cohort') {
+                if (__DEV__) console.log('[CommunityScreen] Switching to Cohort tab');
+                setSelectedTab('cohort');
+                // Refetch cohort if not currently loading (prevents spam)
+                if (!loadingRankings && !isFetchingRankingsRef.current) {
+                  fetchRankings();
+                }
               }
             }}
             activeOpacity={0.7}>
@@ -622,6 +553,9 @@ export default function CommunityScreen() {
               <Text style={styles.cohortTitle}>{monthName || 'Cohort'} Cohort</Text>
               <Text style={styles.cohortSubtitle}>
                 {formatMemberCount(memberCount)} • Resets {resetsOn ? formatResetsDate(resetsOn) : getNextMonthDay1()}
+              </Text>
+              <Text style={styles.cohortExplanation}>
+                Cohorts reset monthly. Rankings are based on task completion consistency.
               </Text>
             </View>
 
@@ -704,11 +638,8 @@ export default function CommunityScreen() {
         {/* Feed View */}
         {selectedTab === 'feed' && (
           <>
-            {/* Post Composer Button */}
-            <TouchableOpacity
-              style={styles.composerCard}
-              onPress={handleNewPostPress}
-              activeOpacity={0.7}>
+            {/* Inline Post Composer */}
+            <View style={styles.composerCard}>
               <View style={styles.composerContent}>
                 {avatarUrl ? (
                   <Image
@@ -721,9 +652,34 @@ export default function CommunityScreen() {
                     <Text style={styles.composerAvatarText}>{getInitials(firstName)}</Text>
                   </View>
                 )}
-                <Text style={styles.composerPlaceholder}>What did you execute today?</Text>
+                <View style={styles.composerInputContainer}>
+                  <TextInput
+                    style={styles.composerInput}
+                    placeholder="What did you execute today?"
+                    placeholderTextColor="#666"
+                    value={composerText}
+                    onChangeText={setComposerText}
+                    multiline
+                    maxLength={5000}
+                    editable={!isPosting}
+                  />
+                  <TouchableOpacity
+                    style={[
+                      styles.composerPostButton,
+                      (!composerText.trim() || isPosting) && styles.composerPostButtonDisabled,
+                    ]}
+                    onPress={handlePost}
+                    disabled={!composerText.trim() || isPosting}
+                    activeOpacity={0.7}>
+                    {isPosting ? (
+                      <ActivityIndicator size="small" color="#000" />
+                    ) : (
+                      <Text style={styles.composerPostButtonText}>Post</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
-            </TouchableOpacity>
+            </View>
 
             {/* Posts List */}
             {error && (
@@ -731,10 +687,7 @@ export default function CommunityScreen() {
                 <Text style={styles.errorText}>Error: {error}</Text>
                 <TouchableOpacity
                   style={styles.retryButton}
-                  onPress={() => {
-                    hasFetchedRef.current = false;
-                    fetchPosts();
-                  }}>
+                  onPress={refetchFeed}>
                   <Text style={styles.retryButtonText}>Retry</Text>
                 </TouchableOpacity>
               </View>
@@ -770,17 +723,52 @@ export default function CommunityScreen() {
                         )}
                         <View style={styles.postAuthorInfo}>
                           <Text style={styles.postAuthorName}>
-                            {post.author_first_name || 'Anonymous'}
+                            {post.author_first_name || 'Someone'}
                           </Text>
                           <Text style={styles.postMeta}>
-                            🔥{post.author_streak} • {formatPostDate(post.created_at)}
+                            {formatPostTimestamp(post.created_at)}
                           </Text>
                         </View>
                       </View>
+                      {/* Author-only delete menu */}
+                      {currentUserId === post.author_id && (
+                        <TouchableOpacity
+                          style={styles.postMenuButton}
+                          onPress={() => handleDeletePost(post.id)}
+                          activeOpacity={0.7}>
+                          <MaterialIcons
+                            name="more-vert"
+                            size={20}
+                            color="#999"
+                          />
+                        </TouchableOpacity>
+                      )}
                     </View>
 
                     {/* Post Content */}
                     <Text style={styles.postContent}>{post.body}</Text>
+
+                    {/* Like Button */}
+                    <View style={styles.postActions}>
+                      <TouchableOpacity
+                        style={styles.likeButton}
+                        onPress={() => toggleLike(post.id, post.is_liked)}
+                        activeOpacity={0.7}>
+                        <MaterialIcons
+                          name={post.is_liked ? 'thumb-up' : 'thumb-up-off-alt'}
+                          size={20}
+                          color={post.is_liked ? '#4CAF50' : '#999'}
+                        />
+                        {post.like_count > 0 && (
+                          <Text style={[
+                            styles.likeCount,
+                            post.is_liked && styles.likeCountActive
+                          ]}>
+                            {post.like_count}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 ))}
               </View>
@@ -855,6 +843,12 @@ const styles = StyleSheet.create({
   cohortSubtitle: {
     fontSize: 14,
     color: '#999',
+    marginBottom: 8,
+  },
+  cohortExplanation: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 4,
   },
   rankingsCard: {
     backgroundColor: '#111',
@@ -959,7 +953,7 @@ const styles = StyleSheet.create({
   },
   composerContent: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   composerAvatar: {
     width: 40,
@@ -975,9 +969,33 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
   },
-  composerPlaceholder: {
+  composerInputContainer: {
+    flex: 1,
+  },
+  composerInput: {
     fontSize: 16,
-    color: '#666',
+    color: '#fff',
+    minHeight: 40,
+    maxHeight: 120,
+    marginBottom: 12,
+    textAlignVertical: 'top',
+  },
+  composerPostButton: {
+    alignSelf: 'flex-end',
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  composerPostButtonDisabled: {
+    opacity: 0.5,
+  },
+  composerPostButtonText: {
+    fontSize: 14,
+    color: '#000',
+    fontWeight: '600',
   },
   postsContainer: {
     gap: 12,
@@ -991,10 +1009,18 @@ const styles = StyleSheet.create({
   },
   postHeader: {
     marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   postHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
+  },
+  postMenuButton: {
+    padding: 4,
+    marginLeft: 8,
   },
   postAvatar: {
     width: 40,
@@ -1027,6 +1053,27 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#fff',
     lineHeight: 22,
+    marginBottom: 12,
+  },
+  postActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#222',
+  },
+  likeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  likeCount: {
+    fontSize: 14,
+    color: '#999',
+    marginLeft: 4,
+  },
+  likeCountActive: {
+    color: '#4CAF50',
   },
   emptyContainer: {
     alignItems: 'center',
